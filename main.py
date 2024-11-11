@@ -5,20 +5,9 @@ from typing import Any
 from prometheus_client import start_http_server, Counter
 import time
 import threading
-import gc
 
 # Prometheus metrics setup
 TOKENIZATION_REQUESTS = Counter('tokenization_requests_total', 'Total number of tokenization requests')
-
-# GC collection tracking counters
-GC_COLLECTIONS_GEN0 = Counter("python_gc_collections_total", "Number of times generation 0 was collected", ["generation"])
-GC_COLLECTIONS_GEN1 = Counter("python_gc_collections_total", "Number of times generation 1 was collected", ["generation"])
-
-# Track GC collections in the Python program
-def track_gc():
-    gc.collect()  # Perform garbage collection
-    GC_COLLECTIONS_GEN0.labels(generation="0").inc()  # Increment GC count for generation 0
-    GC_COLLECTIONS_GEN1.labels(generation="1").inc()  # Increment GC count for generation 1
 
 class TokenType(enum.Enum):
     LEFT_PAREN = "LEFT_PAREN"
@@ -239,9 +228,7 @@ def monitor_tokenization(file_contents: str):
     for token in tokens:
         print(token)
 
-    # Track garbage collection
-    track_gc()
-
+# Start Prometheus server
 def start_prometheus_server():
     print("Starting Prometheus server on port 8000...")
     start_http_server(8000)
@@ -253,12 +240,30 @@ def main():
     prometheus_thread.daemon = True
     prometheus_thread.start()
 
-    # Example file contents (tokenization simulation)
-    file_contents = "var x = 10 + 20;"
+    # File path from command line argument
+    if len(sys.argv) < 3:
+        print("Usage: python main.py tokenize <file_path>")
+        exit(1)
+
+    if sys.argv[1] != "tokenize":
+        print("Invalid command. Use 'tokenize' as the first argument.")
+        exit(1)
+
+    file_path = pathlib.Path(sys.argv[2])
+    if not file_path.exists():
+        print(f"File {file_path} does not exist!", file=sys.stderr)
+        exit(1)
+
+    # Read the content of the file
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
+
+    # Monitor tokenization and process the file
+    monitor_tokenization(file_contents)
+
+    # Keep the main program running so that Prometheus server continues in the background
     while True:
-        monitor_tokenization(file_contents)
-        time.sleep(5)  # Simulate some delay for periodic tokenization
-        track_gc()  # Track GC collections periodically
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
