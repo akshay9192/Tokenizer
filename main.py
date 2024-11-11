@@ -2,6 +2,23 @@ import enum
 import pathlib
 import sys
 from typing import Any
+from prometheus_client import start_http_server, Counter
+import time
+import threading
+import gc
+
+# Prometheus metrics setup
+TOKENIZATION_REQUESTS = Counter('tokenization_requests_total', 'Total number of tokenization requests')
+
+# GC collection tracking counters
+GC_COLLECTIONS_GEN0 = Counter("python_gc_collections_total", "Number of times generation 0 was collected", ["generation"])
+GC_COLLECTIONS_GEN1 = Counter("python_gc_collections_total", "Number of times generation 1 was collected", ["generation"])
+
+# Track GC collections in the Python program
+def track_gc():
+    gc.collect()  # Perform garbage collection
+    GC_COLLECTIONS_GEN0.labels(generation="0").inc()  # Increment GC count for generation 0
+    GC_COLLECTIONS_GEN1.labels(generation="1").inc()  # Increment GC count for generation 1
 
 class TokenType(enum.Enum):
     LEFT_PAREN = "LEFT_PAREN"
@@ -14,7 +31,6 @@ class TokenType(enum.Enum):
     PLUS = "PLUS"
     MINUS = "MINUS"
     SEMICOLON = "SEMICOLON"
-    COLON = "COLON"             # Added COLON for ':'
     EQUAL = "EQUAL"
     EQUAL_EQUAL = "EQUAL_EQUAL"
     BANG = "BANG"
@@ -43,7 +59,6 @@ class TokenType(enum.Enum):
     TRUE = "TRUE"
     VAR = "VAR"
     WHILE = "WHILE"
-    DEF = "DEF"                 # Added DEF for function definitions
     EOF = "EOF"
 
 class Token:
@@ -79,17 +94,26 @@ class Scanner:
     def scan_token(self) -> None:
         char = self.advance()
         match char:
-            case "(": self.add_token(TokenType.LEFT_PAREN)
-            case ")": self.add_token(TokenType.RIGHT_PAREN)
-            case "{": self.add_token(TokenType.LEFT_BRACE)
-            case "}": self.add_token(TokenType.RIGHT_BRACE)
-            case "*": self.add_token(TokenType.STAR)
-            case ".": self.add_token(TokenType.DOT)
-            case ",": self.add_token(TokenType.COMMA)
-            case "+": self.add_token(TokenType.PLUS)
-            case "-": self.add_token(TokenType.MINUS)
-            case ";": self.add_token(TokenType.SEMICOLON)
-            case ":": self.add_token(TokenType.COLON)      # Handle colon ':'
+            case "(":
+                self.add_token(TokenType.LEFT_PAREN)
+            case ")":
+                self.add_token(TokenType.RIGHT_PAREN)
+            case "{":
+                self.add_token(TokenType.LEFT_BRACE)
+            case "}":
+                self.add_token(TokenType.RIGHT_BRACE)
+            case "*":
+                self.add_token(TokenType.STAR)
+            case ".":
+                self.add_token(TokenType.DOT)
+            case ",":
+                self.add_token(TokenType.COMMA)
+            case "+":
+                self.add_token(TokenType.PLUS)
+            case "-":
+                self.add_token(TokenType.MINUS)
+            case ";":
+                self.add_token(TokenType.SEMICOLON)
             case "!":
                 self.add_token(TokenType.BANG_EQUAL) if self.match("=") else self.add_token(TokenType.BANG)
             case "=":
@@ -104,16 +128,19 @@ class Scanner:
                         self.advance()
                 else:
                     self.add_token(TokenType.SLASH)
-            case "#":                                   # Handle comments
-                while self.peek() != "\n" and not self.is_at_end():
-                    self.advance()
-            case " " | "\r" | "\t": pass
-            case "\n": self.line += 1
-            case '"': self.string()
+            case " " | "\r" | "\t":
+                ...
+            case "\n":
+                self.line += 1
+            case '"':
+                self.string()
             case _:
-                if self.is_digit(char): self.number()
-                elif self.is_alpha_numeric(char): self.identifier()
-                else: self.error(f"Unexpected character: {char}")
+                if self.is_digit(char):
+                    self.number()
+                elif self.is_alpha_numeric(char):
+                    self.identifier()
+                else:
+                    self.error(f"Unexpected character: {char}")
 
     def advance(self) -> str:
         self.current += 1
@@ -132,7 +159,9 @@ class Scanner:
         return self.source[self.current + 1]
 
     def match(self, expected: str) -> bool:
-        if self.is_at_end() or self.source[self.current] != expected:
+        if self.is_at_end():
+            return False
+        if self.source[self.current] != expected:
             return False
         self.current += 1
         return True
@@ -150,17 +179,19 @@ class Scanner:
         self.add_token(TokenType.STRING, value)
 
     def is_digit(self, char: str) -> bool:
-        return "0" <= char <= "9"
+        return char >= "0" and char <= "9"
 
     def number(self) -> None:
-        while self.is_digit(self.peek()): self.advance()
+        while self.is_digit(self.peek()):
+            self.advance()
         if self.peek() == "." and self.is_digit(self.peek_next()):
             self.advance()
-            while self.is_digit(self.peek()): self.advance()
+        while self.is_digit(self.peek()):
+            self.advance()
         self.add_token(TokenType.NUMBER, float(self.source[self.start : self.current]))
 
     def is_alpha(self, char: str) -> bool:
-        return "a" <= char <= "z" or "A" <= char <= "Z" or char == "_"
+        return char >= "a" and char <= "z" or char >= "A" and char <= "Z" or char == "_"
 
     def is_alpha_numeric(self, char: str) -> bool:
         return self.is_alpha(char) or self.is_digit(char)
@@ -173,6 +204,7 @@ class Scanner:
         self.add_token(token_type)
 
     def identifier_type(self, text: str) -> TokenType:
+        """Check if the identifier matches any reserved words."""
         reserved_words = {
             "and": TokenType.AND,
             "class": TokenType.CLASS,
@@ -190,31 +222,43 @@ class Scanner:
             "true": TokenType.TRUE,
             "var": TokenType.VAR,
             "while": TokenType.WHILE,
-            "def": TokenType.DEF,
         }
         return reserved_words.get(text, TokenType.IDENTIFIER)
 
     def error(self, char: str) -> None:
         self.errors.append(f"[line {self.line}] Error: {char}")
 
-def main() -> None:
-    if len(sys.argv) < 3:
-        print("Usage: python main.py tokenize <filename>", file=sys.stderr)
-        exit(1)
-    command = sys.argv[1]
-    filename = sys.argv[2]
-    if command != "tokenize":
-        print(f"Unknown command: {command}", file=sys.stderr)
-        exit(1)
-    file_contents = pathlib.Path(filename).read_text()
+# Prometheus metrics monitoring
+def monitor_tokenization(file_contents: str):
+    # Track the number of tokenizations using the counter metric
+    TOKENIZATION_REQUESTS.inc()  # Increment the request counter after processing the file
+
+    # Simulate the tokenization process
     scanner = Scanner(file_contents)
     tokens, errors = scanner.scan_tokens()
     for token in tokens:
         print(token)
-    for error in errors:
-        print(error, file=sys.stderr)
-    if errors:
-        exit(65)
+
+    # Track garbage collection
+    track_gc()
+
+def start_prometheus_server():
+    print("Starting Prometheus server on port 8000...")
+    start_http_server(8000)
+    print("Prometheus server started on port 8000.")
+
+def main():
+    # Start Prometheus server in a separate thread
+    prometheus_thread = threading.Thread(target=start_prometheus_server)
+    prometheus_thread.daemon = True
+    prometheus_thread.start()
+
+    # Example file contents (tokenization simulation)
+    file_contents = "var x = 10 + 20;"
+    while True:
+        monitor_tokenization(file_contents)
+        time.sleep(5)  # Simulate some delay for periodic tokenization
+        track_gc()  # Track GC collections periodically
 
 if __name__ == "__main__":
     main()
