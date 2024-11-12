@@ -1,5 +1,9 @@
 # This is a large test file for evaluating tokenization and Prometheus metrics
-
+var1 = 200
+var2 = 800
+answer = var1 + var2
+production = var1* var2
+remainder = var1 % var2
 # Some simple arithmetic operations
 a = 10 + 25 - 3 * 2 / 4
 b = 7 * (8 - 4)
